@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+// wire-test is a tool for generating and sending traces, using the wire_protocol module.
+// This is helpful for when we want to investigate how a trace is processed or displayed
+//
+// Usage:
+//  wire-test ./wire-tests/nested_query.js
+//
+//  nested_query.js will be executed with all of the wire protocol methods in scope.
+//
+//  calling a wire protocol method will add the result to a list, that is batched and sent after the script executes
+
+
+require('ts-node/register');
+const dgram = require('dgram');
+const fs = require('fs');
+const vm = require('vm');
+
+const file = process.argv[2];
+
+if (!file) {
+  throw new Error('Please provide a filename for the test file as a command-line argument');
+}
+
+const wireMethods = require('../src/process_profile/wire_protocol.ts');
+const wireMethodHelpers = require('../src/process_profile/wire_protocol_helpers.ts');
+
+const code = fs.readFileSync(file, 'utf-8');
+const script = new vm.Script(code);
+
+const effectfulWireMethods = {};
+
+const messages = [];
+
+for (let method in wireMethods) {
+  effectfulWireMethods[method] = function (...args) {
+    const result = wireMethods[method].apply(null, args);
+    messages.push(result);
+  }
+}
+
+script.runInNewContext({...global, ...effectfulWireMethods, process})
+
+const socket = dgram.createSocket('udp4');
+
+const batches = wireMethodHelpers.splitMessagesIntoBatches(messages);
+
+function sendUdp(socket, buffer, port, host) {
+  return new Promise((resolve, reject) => {
+    socket.send(buffer, port, host, err => {
+      if (err) {
+        console.error(err);
+        reject(err);
+      } else {
+        resolve(null);
+      }
+    });
+  });
+}
+
+async function processMessages() {
+  let i = 1;
+  for (let batch of batches) {
+    if (batch.batch) {
+      await sendUdp(socket, wireMethods.CT_BATCH(0, batch.messages, i++), 2799, 'localhost');
+    } else {
+      await sendUdp(socket, wireMethods.CT_BATCH(0, batch.message, i++), 2799, 'localhost');
+    }
+  }
+}
+
+console.log(`Sending ${messages.length} messages in ${batches.length} batches`);
+
+processMessages().then(() => {
+  console.log('Complete!')
+  socket.close();
+})
+.catch(err => {
+  console.log('Error occurred while sending:');
+  throw err;
+});
+

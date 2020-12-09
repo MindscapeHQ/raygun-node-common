@@ -1,0 +1,10 @@
+sequenceDiagram
+  participant UA as User App;
+  participant R as raygun-apm;
+  participant RIM as require-in-the-middle;
+
+  UA->>R: require("raygun-apm");
+  R->>RIM: activate require patches
+
+  UA->>RIM: require("pg")
+  RIM-->>UA: patched pg module

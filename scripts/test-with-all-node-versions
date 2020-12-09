@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+const fs = require('fs-extra');
+const path = require('path');
+const child_process = require('child_process');
+const IS_WINDOWS = process.platform === 'win32';
+
+const SUPPORTED_VERSIONS = ['8', '10', '11', '12', '13', '14'];
+const FILES_TO_COPY = [
+  'package.json',
+  'package-lock.json',
+  'Makefile',
+  'src/',
+  'tests/',
+  'scripts/',
+];
+
+const CWD = process.cwd();
+const p = path.join.bind(path, CWD);
+
+let versionsToTest = SUPPORTED_VERSIONS;
+
+if (process.argv.length > 2) {
+  versionsToTest = process.argv.slice(2);
+}
+
+let exitCode = 0;
+
+for (const version of versionsToTest) {
+  console.log(`Testing on Node v${version}`);
+
+  const testPath = p(`test-deps`, `node${version}`);
+
+  try {
+    if (IS_WINDOWS) {
+      child_process.execSync(`rmdir /s /q ${testPath}`);
+    } else {
+      child_process.execSync(`rm -rf ${testPath}`);
+    }
+  } catch (e) {
+    console.error(e);
+    // it's fine if the directory already exists
+  }
+
+  fs.mkdirpSync(testPath);
+
+  for (let file of FILES_TO_COPY) {
+    fs.copySync(p(file), path.join(testPath, file));
+  }
+
+  const command = `cd \"${testPath}\" && npm install --ignore-scripts && npm run build:native && npm test`;
+
+  try {
+    child_process.execSync(`node "${p('scripts', 'nod')}" ${version} "${command}"`, {
+      shell: true,
+      stdio: 'inherit',
+    });
+  } catch (e) {
+    exitCode += e.status;
+  }
+}
+
+process.exit(exitCode);
