@@ -199,12 +199,12 @@ function checkCurrentBranch() {
 function updatePackageJson(newVersion) {
   const updatedPackageJson = { ...packageData, version: newVersion };
 
-  fs.writeFileSync('./package.json', JSON.stringify(updatedPackageJson, null, 2));
+  fs.writeFileSync('./package.json', JSON.stringify(updatedPackageJson, null, 2) + '\n');
   console.log('Wrote package.json');
 
   const packageLock = require('../package-lock.json');
   const updatedPackageLock = { ...packageLock, version: newVersion };
-  fs.writeFileSync('./package-lock.json', JSON.stringify(updatedPackageLock, null, 2));
+  fs.writeFileSync('./package-lock.json', JSON.stringify(updatedPackageLock, null, 2) + '\n');
 
   console.log('Wrote package-lock.json');
 
