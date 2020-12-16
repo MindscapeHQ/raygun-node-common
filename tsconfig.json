@@ -45,7 +45,6 @@
     // "rootDirs": [],                        /* List of root folders whose combined content represents the structure of the project at runtime. */
     // "typeRoots": [],                       /* List of folders to include type definitions from. */
     "types": [
-      "./v8-profiler-node8",
       "./require-in-the-middle",
       "mocha",
       "node",
