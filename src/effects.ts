@@ -15,6 +15,10 @@ export class TypedEventEmitter<T> {
     this.events.on(s as string | symbol, f);
   }
 
+  once<K extends keyof T, V extends T[K]>(s: K, f: (v: V) => void) {
+    this.events.once(s as string | symbol, f);
+  }
+
   off<K extends keyof T, V extends T[K]>(s: K, f: (v: V) => void) {
     this.events.off(s as string | symbol, f);
   }
@@ -56,6 +60,22 @@ export function recordQuery(
 ): Query["events"] {
   const events = new TypedEventEmitter();
   effects.emit("query", {
+    startTime,
+    moduleName,
+    events,
+    asyncId,
+  });
+
+  return events;
+}
+
+export function recordRequest(
+  moduleName: string,
+  startTime: BI.PortableBigInt,
+  asyncId: number
+): Request["events"] {
+  const events = new TypedEventEmitter();
+  effects.emit("request", {
     startTime,
     moduleName,
     events,

@@ -44,7 +44,7 @@ describe("pg support", () => {
   it("allows tracking postgres queries", (done) => {
     const asyncId = executionAsyncId();
 
-    effects.on("query", (query) => {
+    effects.once("query", (query) => {
       assert.equal(query.moduleName, "pg");
       assert.equal(typeof query.startTime, "bigint");
 
