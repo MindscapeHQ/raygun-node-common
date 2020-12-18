@@ -2,7 +2,7 @@ import { AsyncResource, executionAsyncId } from 'async_hooks';
 import path from 'path';
 
 import { wrapType } from '../async';
-import { recordQueryWithExitPoint } from '../async_effect_helpers';
+import { recordQuery } from '../effects';
 import * as BI from '../bigint';
 import { scopedDebug } from '../debug';
 import { patchModules } from '../module_patches';
@@ -102,73 +102,76 @@ function recordMongoQuery(event: MongoInstrumentationEvent) {
   operations.delete(event.requestId);
 }
 
-patchModules(['mongodb'], (exports: any) => {
-  const listener = exports.instrument(() => {});
+export function load() {
+  patchModules(['mongodb'], (exports: any) => {
+    const listener = exports.instrument(() => {});
 
-  listener.on('started', function (event: MongoInstrumentationEvent) {
-    const startTime = BI.now();
-    if (event.commandName === 'ismaster') {
-      return;
-    }
-    operations.set(event.requestId, {
-      event,
-      startTime,
-      asyncResource: new AsyncResource(`MONGO_OPERATION`),
-      recordQuery: recordQueryWithExitPoint(`mongodb`),
+    listener.on('started', function (event: MongoInstrumentationEvent) {
+      const startTime = BI.now();
+      if (event.commandName === 'ismaster') {
+        return;
+      }
+      const queryEvents = recordQuery(`mongodb`, startTime, executionAsyncId());
+      operations.set(event.requestId, {
+        event,
+        startTime,
+        asyncResource: new AsyncResource(`MONGO_OPERATION`),
+        recordQuery: (q) => queryEvents.emit('complete', q),
+      });
     });
+
+    listener.on('succeeded', recordMongoQuery);
+    listener.on('failed', recordMongoQuery);
+
+    return exports;
   });
 
-  listener.on('succeeded', recordMongoQuery);
-  listener.on('failed', recordMongoQuery);
+  patchModules([path.join('mongodb', 'lib', 'operations', 'operation.js')], (exports: any) => {
+    exports.OperationBase = wrapType(exports.OperationBase, [], []);
 
-  return exports;
-});
+    return exports;
+  });
 
-patchModules([path.join('mongodb', 'lib', 'operations', 'operation.js')], (exports: any) => {
-  exports.OperationBase = wrapType(exports.OperationBase, [], []);
+  patchModules(
+    [path.join('mongodb', 'lib', 'operations', 'execute_operation.js')],
+    (exports: any) => {
+      const executeOperation = exports;
 
-  return exports;
-});
+      function wrappedExecuteOperation<
+        This,
+        Topology,
+        Operation extends HasAsyncResource,
+        Callback
+      >(this: This, topology: Topology, operation: Operation, callback: Callback) {
+        return operation._asyncResource.runInAsyncScope(
+          executeOperation,
+          this,
+          topology,
+          operation,
+          callback,
+        );
+      }
 
-patchModules(
-  [path.join('mongodb', 'lib', 'operations', 'execute_operation.js')],
-  (exports: any) => {
-    const executeOperation = exports;
+      return wrappedExecuteOperation;
+    },
+  );
 
-    function wrappedExecuteOperation<This, Topology, Operation extends HasAsyncResource, Callback>(
-      this: This,
-      topology: Topology,
-      operation: Operation,
-      callback: Callback,
-    ) {
-      return operation._asyncResource.runInAsyncScope(
-        executeOperation,
-        this,
-        topology,
-        operation,
-        callback,
-      );
-    }
+  patchModules([path.join('mongodb', 'lib', 'core', 'connection', 'msg.js')], (exports: any) => {
+    const parse = exports.BinMsg.prototype.parse;
 
-    return wrappedExecuteOperation;
-  },
-);
+    exports.BinMsg.prototype.parse = function wrappedParse<
+      This,
+      WorkItem extends { requestId: number }
+    >(this: This, workItem: WorkItem) {
+      const asyncResource = operations.get(workItem.requestId)?.asyncResource;
 
-patchModules([path.join('mongodb', 'lib', 'core', 'connection', 'msg.js')], (exports: any) => {
-  const parse = exports.BinMsg.prototype.parse;
+      if (asyncResource) {
+        return asyncResource.runInAsyncScope(parse, this, workItem);
+      } else {
+        return parse.call(this, workItem);
+      }
+    };
 
-  exports.BinMsg.prototype.parse = function wrappedParse<
-    This,
-    WorkItem extends { requestId: number }
-  >(this: This, workItem: WorkItem) {
-    const asyncResource = operations.get(workItem.requestId)?.asyncResource;
-
-    if (asyncResource) {
-      return asyncResource.runInAsyncScope(parse, this, workItem);
-    } else {
-      return parse.call(this, workItem);
-    }
-  };
-
-  return exports;
-});
+    return exports;
+  });
+}
