@@ -30,6 +30,7 @@
     "mocha": "^8.2.1",
     "mongodb": "^3.6.3",
     "mssql": "^6.3.0",
+    "mysql": "^2.18.1",
     "pg": "^8.5.1",
     "prettier": "^2.2.1",
     "ts-node": "^9.1.1",
@@ -40,7 +41,7 @@
     "prepare": "npm run build",
     "build": "tsc",
     "test": "mocha 'tests/**/*.ts' --require ts-node/register --exit",
-    "test-glob": "mocha --require ts-node/register --exit"
+    "test-glob": "mocha --color --require ts-node/register --exit"
   },
   "keywords": [],
   "author": "",
