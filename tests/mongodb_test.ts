@@ -4,7 +4,7 @@ import dns from 'dns';
 import os from 'os';
 import { spawnSync } from 'child_process';
 
-require('../src/module_patches/mongodb').load();
+require('../src/module_patches').loadAll();
 
 import { effects } from '../src/effects';
 import { MongoClient } from 'mongodb';

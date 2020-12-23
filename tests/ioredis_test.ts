@@ -7,9 +7,9 @@ import { effects } from '../src/effects';
 
 require('../src/module_patches').loadAll();
 
-import redis from 'redis';
+import Redis from 'ioredis';
 
-type Client = redis.RedisClient;
+type Client = Redis.Redis;
 
 const HOST = process.env['REDIS_HOST'] || '127.0.0.1';
 const PORT = 6379;
@@ -18,18 +18,18 @@ const DATABASE = '0';
 let client: Client | null = null;
 
 function connectAndSeedDatabase(done: (err?: Error) => void) {
-  client = redis.createClient(PORT, HOST);
+  client = new Redis(PORT, HOST);
 
   done();
 }
 
 function disconnect() {
   if (client) {
-    client.end(true);
+    client.disconnect();
   }
 }
 
-describe('redis support', () => {
+describe('ioredis support', () => {
   before(connectAndSeedDatabase);
   after(disconnect);
 
@@ -45,17 +45,19 @@ describe('redis support', () => {
         throw err;
       }
 
+      debugger;
+
       assert.equal(asyncId, triggerAsyncId());
 
       done();
     });
   }).timeout(10000);
 
-  it('allows tracking redis queries', (done) => {
+  it('allows tracking ioredis queries', (done) => {
     const asyncId = executionAsyncId();
 
     effects.once('query', (query) => {
-      assert.equal(query.moduleName, 'redis');
+      assert.equal(query.moduleName, 'ioredis');
       assert.equal(typeof query.startTime, 'bigint');
 
       query.events.on('complete', (queryData) => {

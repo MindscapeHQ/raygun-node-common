@@ -4,7 +4,7 @@ import os from 'os';
 
 import { effects } from '../src/effects';
 
-require('../src/module_patches/mysql').load();
+require('../src/module_patches').loadAll();
 
 import mysql, { Connection, MysqlError } from 'mysql';
 

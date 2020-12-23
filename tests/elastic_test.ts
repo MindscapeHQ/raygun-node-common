@@ -1,19 +1,19 @@
-import assert from "assert";
-import { triggerAsyncId, executionAsyncId } from "async_hooks";
-import os from "os";
-import { spawnSync } from "child_process";
+import assert from 'assert';
+import { triggerAsyncId, executionAsyncId } from 'async_hooks';
+import os from 'os';
+import { spawnSync } from 'child_process';
 
-import { effects } from "../src/effects";
+import { effects } from '../src/effects';
 
-require("../src/module_patches/elasticsearch").load();
+require('../src/module_patches').loadAll();
 
-import elastic from "@elastic/elasticsearch";
+import elastic from '@elastic/elasticsearch';
 
 type Client = elastic.Client;
 
-const HOST = process.env["ELASTIC_HOST"] || "localhost";
-const PORT = "9200";
-const DATABASE = "customer";
+const HOST = process.env['ELASTIC_HOST'] || 'localhost';
+const PORT = '9200';
+const DATABASE = 'customer';
 
 let client: Client | null = null;
 
@@ -23,7 +23,7 @@ async function connectAndSeedDatabase() {
   await client.index({
     index: DATABASE,
     body: {
-      name: "Test",
+      name: 'Test',
     },
   });
 }
@@ -34,11 +34,11 @@ function disconnect() {
   }
 }
 
-describe("elastic support", () => {
+describe('elastic support', () => {
   before(connectAndSeedDatabase);
   after(disconnect);
 
-  it("propagates async contexts into query callbacks", (done) => {
+  it('propagates async contexts into query callbacks', (done) => {
     const asyncId = executionAsyncId();
 
     if (!client) {
@@ -63,15 +63,15 @@ describe("elastic support", () => {
       .catch(done);
   });
 
-  it("allows tracking elastic queries", (done) => {
+  it('allows tracking elastic queries', (done) => {
     const asyncId = executionAsyncId();
 
-    effects.once("query", (query) => {
-      assert.equal(query.moduleName, "@elastic/elasticsearch");
-      assert.equal(typeof query.startTime, "bigint");
+    effects.once('query', (query) => {
+      assert.equal(query.moduleName, '@elastic/elasticsearch');
+      assert.equal(typeof query.startTime, 'bigint');
 
-      query.events.once("complete", (queryData) => {
-        assert.equal(queryData.provider, "elasticsearch");
+      query.events.once('complete', (queryData) => {
+        assert.equal(queryData.provider, 'elasticsearch');
         assert.equal(queryData.query, '{"query":{"match_all":{}}}');
         assert.equal(queryData.host, `http://${HOST}:${PORT}/`);
         assert.equal(queryData.database, `POST /${DATABASE}/_search`);

@@ -3,7 +3,7 @@ import { triggerAsyncId, executionAsyncId } from 'async_hooks';
 
 import { effects } from '../src/effects';
 
-require('../src/module_patches/mssql').load();
+require('../src/module_patches').loadAll();
 
 const mssql = require('mssql');
 

@@ -100,10 +100,9 @@ export function wrapPromiseInAsyncResource<T>(
   };
 
   p.catch = function _catch<This, RT>(this: This, f: (err: Error) => RT): any {
-    const newPromise = (oldCatch as any).apply(
-      p,
+    const newPromise = (oldCatch as any).apply(p, [
       wrapFunctionWithAsyncResource(f, this, asyncResource),
-    );
+    ]);
 
     return wrapPromiseInAsyncResource(newPromise, asyncResource);
   };

@@ -5,7 +5,7 @@ import { spawnSync } from 'child_process';
 
 import { effects } from '../src/effects';
 
-require('../src/module_patches/memcached').load();
+require('../src/module_patches').loadAll();
 
 import Memcached from 'memcached';
 

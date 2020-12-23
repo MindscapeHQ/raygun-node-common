@@ -88,3 +88,29 @@ Hook(null, { internals: true }, function (exports: Exports, name: string) {
 
   return exports;
 });
+
+let loaded = false;
+
+export function loadAll() {
+  if (loaded) {
+    return;
+  }
+  console.log('loading!');
+
+  loaded = true;
+
+  const patches = [
+    'elasticsearch',
+    'memcached',
+    'mongodb',
+    'mssql',
+    'mysql',
+    'mysql2',
+    'pg',
+    'redis',
+  ];
+
+  for (const patch of patches) {
+    require(path.resolve('./src/module_patches/', patch)).load();
+  }
+}

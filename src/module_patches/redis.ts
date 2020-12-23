@@ -1,6 +1,7 @@
 import { executionAsyncId, AsyncResource } from 'async_hooks';
 import path from 'path';
 
+import { wrapFunctionWithAsyncResource, wrapPromiseInAsyncResource } from '../async';
 import { recordQuery } from '../effects';
 import * as BI from '../bigint';
 import { patchModules } from '../module_patches';
@@ -38,6 +39,8 @@ type Command = { _address: string; _selected_db: number; _asyncResource: AsyncRe
 type Client = { command_queue: Denque<Command>; address: string; selected_db: number };
 
 type ClientQueueView = () => AsyncResource | null;
+
+const ASYNC_RESOURCE = Symbol('ASYNC_RESOURCE');
 
 export function load() {
   const clientsConstructing: ClientQueueView[] = [];
@@ -205,13 +208,35 @@ export function load() {
         });
       });
 
-      command._asyncResource = new AsyncResource('IOREDIS_COMMAND');
-
       return sendCommand.call(this, command, stream);
     };
 
     return exports;
   });
+
+  patchModules(
+    [path.join('ioredis', 'built', 'command.js'), path.join('ioredis', 'lib', 'command.js')],
+    (exports) => {
+      const OriginalCommand = exports.default;
+      type Args = ConstructorParameters<typeof OriginalCommand>[1];
+      type Options = ConstructorParameters<typeof OriginalCommand>[2];
+      type Callback = Parameters<typeof wrapFunctionWithAsyncResource>[0];
+
+      class Command extends OriginalCommand {
+        [ASYNC_RESOURCE]: AsyncResource;
+
+        constructor(name: string, args: Args, options: Options, callback: Callback) {
+          const asyncResource = new AsyncResource('IOREDIS_COMMAND');
+          super(name, args, options, wrapFunctionWithAsyncResource(callback, null, asyncResource));
+          this[ASYNC_RESOURCE] = asyncResource;
+          this.promise = wrapPromiseInAsyncResource(this.promise, asyncResource);
+        }
+      }
+
+      exports.default = Command;
+      return exports;
+    },
+  );
 
   patchModules(
     [
@@ -229,7 +254,7 @@ export function load() {
             const val = self.commandQueue.peek();
 
             if (val) {
-              return val.command._asyncResource;
+              return val.command[ASYNC_RESOURCE];
             }
 
             return null;
