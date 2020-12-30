@@ -72,13 +72,19 @@ export function wrapFunctionWithAsyncResource<This, Args, RT>(
   t: This,
   asyncResource: AsyncResource,
 ) {
+  if (typeof f !== 'function') {
+    return f;
+  }
   return (...args: Args[]): RT => asyncResource.runInAsyncScope(f, t, ...args);
 }
 
-export function wrapPromiseInAsyncResource<T>(
-  p: Promise<T>,
+export function wrapPromiseInAsyncResource<T, V extends Promise<T> | null>(
+  p: V,
   asyncResource: AsyncResource,
-): Promise<T> {
+): V {
+  if (!p) {
+    return p;
+  }
   const oldThen = p.then;
   const oldCatch = p.catch;
 
@@ -114,6 +120,10 @@ export function wrapFunctionReturningPromiseWithAsyncResource<This, Args, T>(
   f: (this: This, ...args: Args[]) => Promise<T>,
   label: string,
 ): (this: This, ...args: Args[]) => Promise<T> {
+  if (typeof f !== 'function') {
+    return f;
+  }
+
   return function (this: This, ...args: Args[]) {
     const asyncResource = new AsyncResource(label);
 

@@ -111,6 +111,6 @@ export function loadAll() {
   ];
 
   for (const patch of patches) {
-    require(path.resolve('./src/module_patches/', patch)).load();
+    require(path.resolve(__dirname, 'module_patches', patch)).load();
   }
 }
