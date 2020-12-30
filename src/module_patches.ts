@@ -95,11 +95,11 @@ export function loadAll() {
   if (loaded) {
     return;
   }
-  console.log('loading!');
 
   loaded = true;
 
   const patches = [
+    'http_outgoing',
     'elasticsearch',
     'memcached',
     'mongodb',

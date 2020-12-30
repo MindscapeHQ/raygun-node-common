@@ -5,6 +5,7 @@ import {
   AsyncResource,
   AsyncResourceOptions,
 } from 'async_hooks';
+import { EventEmitter } from 'events';
 
 export class AsyncResourceWithFields<T> extends AsyncResource {
   public fields: T;
@@ -129,4 +130,34 @@ export function wrapFunctionReturningPromiseWithAsyncResource<This, Args, T>(
 
     return wrapPromiseInAsyncResource(f.apply(this, args), asyncResource);
   };
+}
+
+export function wrapEventEmitterWithAsyncResource(
+  ee: EventEmitter,
+  asyncResource: AsyncResource,
+): EventEmitter {
+  const patchedMethods: (keyof EventEmitter)[] = [
+    'on',
+    'once',
+    'addListener',
+    'prependListener',
+    'prependOnceListener',
+  ];
+
+  for (let name of patchedMethods) {
+    const originalMethod = ee[name];
+
+    (ee as any)[name] = function <This>(
+      this: This,
+      ...args: Parameters<typeof originalMethod>
+    ): ReturnType<typeof originalMethod> {
+      const wrappedArgs = (args as any[]).map((arg: any) =>
+        typeof arg === 'function' ? wrapFunctionWithAsyncResource(arg, this, asyncResource) : arg,
+      );
+
+      return (originalMethod as any).apply(this, wrappedArgs);
+    };
+  }
+
+  return ee;
 }
