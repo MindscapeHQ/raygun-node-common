@@ -1,0 +1,229 @@
+#!/usr/bin/env node
+
+const { spawn, exec, execSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const semver = require('semver');
+const stringify = require('json-stable-stringify');
+const rimraf = require('rimraf');
+
+const configPath = path.join(process.cwd(), 'supported-libraries.json');
+const lockPath = path.join(process.cwd(), 'supported-libraries-lock.json');
+
+const doRemoval = !process.argv.includes('--keep');
+
+const cliVersions = process.argv.map(a => a.split('@')).filter(a => a.length === 2);
+
+const lockStringifyConfig = {
+  cmp (a, b) {
+    if (typeof a.value === "object") {
+      return a.key > b.key ? 1 : -1;
+    }
+
+    return semver.compare(a.key, b.key);
+  },
+  space: 2
+}
+
+function makePrompt() {
+  return {
+    set(s, color = 0) {
+      process.stdout.clearLine();
+      process.stdout.cursorTo(0);
+      process.stdout.write(`\u001b[${color}m${s}`);
+    },
+    print(s, color = 0) {
+      process.stdout.clearLine();
+      process.stdout.cursorTo(0);
+      process.stdout.write(`\u001b[${color}m${s}\n`);
+    },
+  };
+}
+
+const prompt = makePrompt();
+
+function loadConfig(configPath) {
+  if (!fs.existsSync(configPath)) {
+    console.log(`Error: could not find a config at ${configPath}`);
+    process.exit(1);
+  }
+
+  const configJSON = fs.readFileSync(configPath, 'utf-8');
+  let config;
+
+  try {
+    config = JSON.parse(configJSON);
+  } catch (e) {
+    console.log(`Encountered an error parsing ${configPath}`);
+    throw e;
+  }
+  return config;
+}
+
+function loadLock(path) {
+  if (!fs.existsSync(lockPath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
+  } catch (e) {
+    console.log(`Encountered an error parsing ${configPath}`);
+    throw e;
+  }
+}
+
+function versionsToTest(name, supportedRange, existingLock) {
+  const versions = JSON.parse(execSync(`npm view ${name} versions --json`));
+
+  return versions.filter(v => !existingLock[v] && semver.satisfies(v, supportedRange));
+}
+
+async function testPackage(name, versions, test, recordResult) {
+  if (versions.length === 0) {
+    console.log(`[${name}] All supported versions already passing`);
+    return [];
+  }
+
+  const results = [];
+
+  for (let version of versions) {
+    const result = await testVersion(name, version, test);
+    results.push({ version, result });
+    recordResult(version, result.passed);
+
+    if (!result.passed) {
+      prompt.print('');
+
+      console.log('Failed!');
+
+      if (result.stdout.length > 0) {
+        console.log('stdout:\n', result.stdout);
+      }
+
+      if (result.stderr.length > 0) {
+        console.log('stderr:\n', result.stderr);
+      }
+    }
+  }
+
+  const failures = results.filter(r => !r.result.passed);
+
+  return results;
+}
+
+function makeRunner(folder) {
+  function run(command, dir = folder) {
+    return new Promise((resolve, reject) => {
+      const p = exec(command, { cwd: dir });
+
+      let stderr = '';
+      let stdout = '';
+
+      p.stdout.on('data', data => {
+        stdout += data.toString('utf-8');
+      });
+
+      p.stderr.on('data', data => {
+        stderr += data.toString('utf-8');
+      });
+
+      p.on('close', code => {
+        resolve({ passed: code === 0, stdout, stderr });
+      });
+    });
+  }
+
+  return run;
+}
+
+async function testVersion(name, version, test) {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'deptest'));
+  const run = makeRunner(folder);
+  let result;
+
+  try {
+    prompt.set(`[${name}@${version}] Copying project files`);
+    await run(
+      `cp -RP node_modules tsconfig.json Makefile src tests package.json package-lock.json *.d.ts ${folder}`,
+      process.cwd(),
+    );
+    prompt.set(`[${name}@${version}] Installing`);
+    await run(`npm install ${name}@${version} --save`);
+    await run(`npm run native:build`);
+    prompt.set(`[${name}@${version}] Running tests`);
+    result = await run(`npm run test-glob ${test}`);
+    prompt.print(`[${name}@${version}] ${result.passed ? '\u001b[32m✔' : '\u001b[31m✗'}\u001b[0m`);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    if (doRemoval) {
+      rimraf(folder, err => {
+        if (err) {
+          console.log(err);
+          process.exit(1);
+        }
+      });
+    } else {
+      console.log(`Keeping ${folder}`);
+    }
+  }
+
+  return result;
+}
+
+async function testPackages(config, existingLock, skipLockedVersions) {
+  const lockResults = existingLock;
+  let failures = 0;
+
+  for (let [packageName, { range, test }] of Object.entries(config)) {
+    let lock = (skipLockedVersions && existingLock[packageName]) || {};
+
+    const versions = versionsToTest(packageName, range, lock);
+
+    function recordResult(version, passed) {
+      if (!lockResults[packageName]) {
+        lockResults[packageName] = {};
+      }
+
+      lockResults[packageName][version] = passed;
+
+      if (!passed) {
+        failures += 1;
+      }
+
+      const lockString = stringify(lockResults, lockStringifyConfig);
+
+      fs.writeFileSync(lockPath, lockString);
+    }
+
+    await testPackage(packageName, versions, test, recordResult);
+  }
+
+  if (failures.length > 0) {
+    process.exit(1);
+  }
+}
+
+let config;
+let skipLockedVersions = true;
+
+if (cliVersions.length > 0) {
+  config = {};
+
+  for (const [name, version] of cliVersions) {
+    if (!config[name]) {
+      config[name] = { range: version, test: `tests/**/*_test.ts` };
+    } else {
+      config[name].range += ` || ${version}`;
+    }
+  }
+
+  skipLockedVersions = false;
+} else {
+  config = loadConfig(configPath);
+}
+
+testPackages(config, loadLock(lockPath), skipLockedVersions);

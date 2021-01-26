@@ -1,0 +1,24 @@
+sequenceDiagram
+  participant UA as User App;
+  participant W as ProfiledWorker;
+  participant WR as Thread;
+  participant E as effects.ts;
+
+  Note over UA: App is profiling
+
+  UA->>W: new Worker(...);
+  W-->>WR: APM MessagePort passed to worker-runtime.ts
+  Note over WR: Profiling starts
+
+  Note over WR: User code runs
+
+  UA->>W: worker.terminate()
+  W-->>WR: "STOP_PROFILING"
+
+  Note over WR: Profiling stops
+  WR-->>W: "PROFILING_COMPLETE"
+  Note over W,WR: Profile is sent as JSON
+
+  W->>UA: worker.terminate() [resolved]
+
+  W->>E: recordWorkerThreadProfile()

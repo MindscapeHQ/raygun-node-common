@@ -1,0 +1,375 @@
+#!/usr/bin/env node
+
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const prompt = require('prompt-sync')({ sigint: true });
+
+const packageData = require('../package.json');
+const currentVersion = packageData.version;
+
+const DRY_RUN = process.argv.includes('--dry-run');
+const SKIP_PREPUBLISH = process.argv.includes('--skip-prepublish');
+const SKIP_BRANCH_CHECK = process.argv.includes('--skip-branch-check');
+const SKIP_CHECKS = process.argv.includes('--skip-checks');
+const SKIP_INTERACTIONS = process.argv.includes('--yes');
+const FORCE = process.argv.includes('--force');
+const PUBLISH = process.argv.includes('--publish');
+const RC = process.argv.includes('--rc');
+
+if (!FORCE && SKIP_CHECKS && !DRY_RUN) {
+  abort(`--skip-checks can only be used in conjunction with --dry-run`);
+}
+
+if (!FORCE && SKIP_PREPUBLISH && !DRY_RUN) {
+  abort(`--skip-prepublish can only be used in conjunction with --dry-run`);
+}
+
+function run(command) {
+  return execSync(command, { encoding: 'utf-8' });
+}
+
+function runWithOutput(command) {
+  return execSync(command, { stdio: 'inherit' });
+}
+
+function abort(reason) {
+  console.log('Release aborted: ' + reason);
+  process.exit(1);
+}
+
+function showHelp() {
+  console.log(`Usage: ./scripts/release (--major|--minor|--patch|--publish-rc|--bump-rc) [--dry-run] [--yes] [--help]
+
+Flags:
+  --dry-run    Logs side effects instead of running them
+  --yes        Skips interactive prompts in script, useful for automation
+  --publich    Publishes the package to npm after committing and tagging - caution advised!
+`);
+
+  process.exit(0);
+}
+
+function getReleaseType() {
+  const suppliedReleaseType = process.argv[2];
+
+  if (
+    suppliedReleaseType === '--major' ||
+    suppliedReleaseType === '--minor' ||
+    suppliedReleaseType === '--patch' ||
+    suppliedReleaseType === '--publish-rc' ||
+    suppliedReleaseType === '--bump-rc'
+  ) {
+    return suppliedReleaseType.slice(2);
+  }
+
+  abort(
+    `Please provide a release type (either --major, --minor, --patch, --publish-rc or --bump-rc) as the first argument to this script`,
+  );
+}
+
+function getNextVersion(releaseType) {
+  if (process.env['RELEASE_VERSION']) {
+    return process.env['RELEASE_VERSION'];
+  }
+
+  const [versionWithoutTags, tags] = currentVersion.split('-');
+  const [major, minor, patch] = versionWithoutTags.split('.').map((part) => parseInt(part, 10));
+
+  let newTags = '';
+
+  if (RC && releaseType === 'publish-rc') {
+    abort(`--rc and --publish-rc cannot be used in conjunction`);
+  }
+
+  if (RC || releaseType === 'bump-rc') {
+    const versionMatch = (tags || '').match(/rc(\d+)/);
+    let previousRC = 0;
+
+    if (versionMatch && versionMatch[1]) {
+      previousRC = parseInt(versionMatch[1], 10);
+    }
+
+    const nextRC = previousRC + 1;
+
+    newTags = `-rc${nextRC}`;
+  }
+
+  if (releaseType === 'bump-rc') {
+    if (!currentVersion.match(/-rc\d+$/)) {
+      abort(`--bump-rc can only be used with a current release candidate`);
+    }
+
+    return [major, minor, patch].join('.') + newTags;
+  }
+
+  if (releaseType === 'publish-rc') {
+    if (!currentVersion.match(/-rc\d+$/)) {
+      abort(`--publish-rc can only be used with a current release candidate`);
+    }
+
+    return [major, minor, patch].join('.');
+  }
+
+  if (releaseType === 'major') {
+    return [major + 1, 0, 0].join('.') + newTags;
+  }
+
+  if (releaseType === 'minor') {
+    return [major, minor + 1, 0].join('.') + newTags;
+  }
+
+  if (releaseType === 'patch') {
+    return [major, minor, patch + 1].join('.') + newTags;
+  }
+}
+
+function checkForModifiedFiles() {
+  if (SKIP_CHECKS) {
+    return;
+  }
+
+  const modifiedFiles = run(`git ls-files -md`)
+    .split('\n')
+    .filter((f) => f.length > 0);
+
+  if (modifiedFiles.length > 0) {
+    const modifiedFileList = modifiedFiles.join('\n');
+    abort(`Modified files were found. Please ensure all files are committed:\n${modifiedFileList}`);
+  }
+}
+
+function checkForUntrackedSourceFiles() {
+  if (SKIP_CHECKS) {
+    return;
+  }
+
+  const untrackedSourceFiles = run(`git ls-files -o --exclude-standard`)
+    .split('\n')
+    .filter((file) => file.startsWith('src' + path.sep));
+
+  if (untrackedSourceFiles.length > 0) {
+    const untrackedSourceFileList = untrackedSourceFiles.join('\n');
+    abort(
+      `Untracked files found in src directory. All source files must be comitted prior to release.\n${untrackedSourceFileList}`,
+    );
+  }
+}
+
+function getChangeLogEntries() {
+  const commitLinesSinceLastVersion = run(`git log v${currentVersion}..HEAD`).split('\n');
+  const releaseNoteRegex = /release.*:\W(.*)/i;
+
+  const releaseNotes = commitLinesSinceLastVersion
+    .map((line) => {
+      const match = line.match(releaseNoteRegex);
+
+      if (match) {
+        return match[1];
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+  return releaseNotes;
+}
+
+function formatChangelogEntries(newVersion, entries) {
+  const items = entries.map((entry) => `- ${entry.trim()}`).join('\n');
+  return `# v${newVersion}\n${items}`;
+}
+
+function checkCurrentBranch() {
+  if (SKIP_CHECKS || SKIP_BRANCH_CHECK) {
+    return;
+  }
+
+  const currentBranch = run(`git rev-parse --abbrev-ref HEAD`).trim();
+  const mainBranch = 'master';
+
+  if (currentBranch !== mainBranch) {
+    abort(
+      `Please ensure the ${mainBranch} branch is checked out. Current branch: ${currentBranch}`,
+    );
+  }
+}
+
+function updatePackageJson(newVersion) {
+  const updatedPackageJson = { ...packageData, version: newVersion };
+
+  fs.writeFileSync('./package.json', JSON.stringify(updatedPackageJson, null, 2) + '\n');
+  console.log('Wrote package.json');
+
+  const packageLock = require('../package-lock.json');
+  const updatedPackageLock = { ...packageLock, version: newVersion };
+  fs.writeFileSync('./package-lock.json', JSON.stringify(updatedPackageLock, null, 2) + '\n');
+
+  console.log('Wrote package-lock.json');
+
+  return `git checkout package.json package-lock.json`;
+}
+
+function addChangelogSection(changelogSection) {
+  const currentChangelog = fs.readFileSync('./CHANGELOG.md', 'utf-8');
+
+  const newChangelog = changelogSection + '\n\n' + currentChangelog;
+
+  fs.writeFileSync('./CHANGELOG.md', newChangelog);
+
+  return `git checkout CHANGELOG.md`;
+}
+
+function getPublishCommand(releaseType) {
+  let options = '';
+
+  if (RC || releaseType === 'bump-rc') {
+    options = '--tag next';
+  }
+
+  return `npm publish ${options}`;
+}
+
+function release() {
+  const rollbackSteps = [];
+
+  function rollback() {
+    for (const step of rollbackSteps) {
+      sideEffectWithOutput(step);
+    }
+
+    console.log('Rolled back succesfully.');
+  }
+
+  function sideEffect(command, rollback = null) {
+    if (!DRY_RUN) {
+      if (rollback) {
+        rollbackSteps.push(rollback);
+      }
+
+      console.log(` $ ${command}`);
+      return run(command);
+    } else {
+      console.log(`[dry-run] Would run \`${command}\``);
+    }
+  }
+
+  function sideEffectWithOutput(command, rollback = null) {
+    if (!DRY_RUN) {
+      if (rollback) {
+        rollbackSteps.push(rollback);
+      }
+
+      console.log(` $ ${command}`);
+      return runWithOutput(command);
+    } else {
+      console.log(`[dry-run] Would run \`${command}\``);
+    }
+  }
+
+  if (process.argv.includes('--help')) {
+    showHelp();
+  }
+
+  process.on('SIGINT', () => {
+    console.log('Rolling back due to user exit.');
+    rollback();
+    process.exit(1);
+  });
+
+  let success = false;
+
+  try {
+    checkForModifiedFiles();
+    checkForUntrackedSourceFiles();
+
+    const releaseType = getReleaseType();
+    const newVersion = getNextVersion(releaseType);
+
+    console.log(`Preparing ${releaseType} release: v${newVersion} ${DRY_RUN ? ' [dry-run]' : ''}`);
+
+    checkCurrentBranch();
+
+    if (!SKIP_PREPUBLISH) {
+      console.log(`$ make prepublish`);
+      runWithOutput(`make prepublish`);
+    } else {
+      console.log(`[skip-prepublish] skipping prepublish`);
+    }
+
+    const changelogEntries = getChangeLogEntries();
+    const changelogSection = formatChangelogEntries(newVersion, changelogEntries);
+
+    console.log();
+    console.log(`  --- Release Summary --- \n`);
+    console.log(`Commits:`);
+    runWithOutput(`git log v${currentVersion}..HEAD --oneline --no-decorate`);
+    console.log();
+
+    console.log(`Changelog:`);
+    console.log(changelogSection);
+    console.log();
+
+    if (!DRY_RUN) {
+      rollbackSteps.push(updatePackageJson(newVersion));
+    } else {
+      console.log(`[dry-run] Would write new version to package.json: ${newVersion}`);
+    }
+
+    if (!DRY_RUN) {
+      rollbackSteps.push(addChangelogSection(changelogSection));
+    } else {
+      console.log(`[dry-run] Would write changelog section to CHANGELOG.md`);
+    }
+
+    let readyToProceed = SKIP_INTERACTIONS;
+
+    while (!readyToProceed) {
+      console.log();
+      console.log(
+        'Please update the new section in the CHANGELOG.md if necessary, and then continue.',
+      );
+      const input = prompt('Proceed? (y/n): ').toLowerCase().trim();
+
+      if (input === 'y') {
+        readyToProceed = true;
+      }
+
+      if (input === 'n') {
+        throw new Error('User cancelled release.');
+        process.exit(1);
+      }
+    }
+
+    const currentCommit = run(`git rev-parse --short HEAD`).trim();
+
+    sideEffectWithOutput(`git add -u .`);
+    sideEffectWithOutput(`git commit -m "v${newVersion}"`, `git reset --hard ${currentCommit}`);
+    sideEffectWithOutput(`git tag v${newVersion}`, `git tag -d v${newVersion}`);
+
+    if (!DRY_RUN) {
+      console.log('Successfully committed and tagged release.');
+    }
+
+    const publishCommand = getPublishCommand(releaseType);
+
+    if (PUBLISH) {
+      sideEffectWithOutput(publishCommand);
+    } else {
+      console.log(`\nTo publish, run:\n  ${publishCommand}\n`);
+    }
+
+    success = true;
+  } catch (e) {
+    console.log(`An error occurred, rolling back.`);
+    rollback();
+    abort(`\n  ${e.stack}`);
+  }
+
+  if (success) {
+    sideEffectWithOutput(`git push origin master --tags`);
+  }
+}
+
+release();
