@@ -1,82 +1,96 @@
-import { executionAsyncId } from 'async_hooks';
+import { executionAsyncId, AsyncResource } from 'async_hooks';
 import { ClientRequest, ServerResponse } from 'http';
 
-import { makeActiveProfileExitPoint } from '../async';
-import { recordHTTPRequestWithExitPoint } from '../async_effect_helpers';
+import { wrapFunctionWithAsyncResource, wrapEventEmitterWithAsyncResource } from '../async';
+import { recordRequest } from '../effects';
 import * as BI from '../bigint';
 import { patchModules } from '../module_patches';
-import { ExitPoint, RequestInformation } from '../types';
+import { RequestInformation } from '../types';
 
 const now = BI.now;
 
 type ResponseCallback = (res: ServerResponse) => void;
 
-patchModules(['http', 'https'], (exports, moduleName) => {
-  const request = exports.request;
+export function load() {
+  patchModules(['http', 'https'], (exports, moduleName) => {
+    const request = exports.request;
 
-  function captureOutgoingRequest(
-    req: ClientRequest & { method: string },
-    res: ServerResponse,
-    startTime: BI.PortableBigInt,
-    recordHTTPRequest: (r: Omit<RequestInformation, 'threadId'>) => void,
-    asyncId: number,
-  ) {
-    const endTime = now();
-    const host = req.getHeaders().host;
-    let url = '';
+    function captureOutgoingRequest(
+      req: ClientRequest & { method: string },
+      res: ServerResponse,
+      startTime: BI.PortableBigInt,
+      recordHTTPRequest: (r: Omit<RequestInformation, 'threadId'>) => void,
+      asyncId: number,
+    ) {
+      wrapEventEmitterWithAsyncResource(res, new AsyncResource('REQUEST', asyncId));
+      const endTime = now();
+      const host = req.getHeaders().host;
+      let url = '';
 
-    url += `${moduleName}://`;
-    url += host || 'UNKNOWN';
+      url += `${moduleName}://`;
+      url += host || 'UNKNOWN';
 
-    url += req.path;
+      url += req.path;
 
-    recordHTTPRequest({
-      direction: 'outgoing',
-      url,
-      method: req.method || 'UNKNOWN',
-      status: res.statusCode,
-      startTime,
-      duration: BI.subtract(endTime, startTime),
-      triggerAsyncId: asyncId,
-    });
-  }
+      recordHTTPRequest({
+        direction: 'outgoing',
+        url,
+        method: req.method || 'UNKNOWN',
+        status: res.statusCode,
+        startTime,
+        duration: BI.subtract(endTime, startTime),
+        triggerAsyncId: asyncId,
+      });
+    }
 
-  function wrappedRequest(options: object, cb: ResponseCallback) {
-    const startTime = now();
-    const recordHTTPRequest = recordHTTPRequestWithExitPoint(`${moduleName}.request(...)`);
-    const asyncId = executionAsyncId();
+    function wrappedRequest(options: object, cb: ResponseCallback) {
+      const startTime = now();
+      const requestEvents = recordRequest(
+        `${moduleName}.request(...)`,
+        startTime,
+        executionAsyncId(),
+      );
+      const recordHTTPRequest = (r: RequestInformation) => requestEvents.emit('complete', r);
+      const asyncId = executionAsyncId();
 
-    const req = request(options, cb);
+      const asyncResource = new AsyncResource('REQUEST');
 
-    req.once('response', function () {
-      captureOutgoingRequest(req, req.res, startTime, recordHTTPRequest, asyncId);
-    });
+      const req = request(options, wrapFunctionWithAsyncResource(cb, null, asyncResource));
 
-    req.once('error', recordHTTPRequest.abort);
+      req.prependOnceListener('response', function () {
+        captureOutgoingRequest(req, req.res, startTime, recordHTTPRequest, asyncId);
+      });
 
-    return req;
-  }
+      req.prependOnceListener('error', (e: Error) => requestEvents.emit('error', e));
 
-  exports.request = wrappedRequest;
+      return req;
+    }
 
-  const get = exports.get;
+    exports.request = wrappedRequest;
 
-  function wrappedGet(options: object, cb: ResponseCallback) {
-    const startTime = now();
-    const recordHTTPRequest = recordHTTPRequestWithExitPoint(`${moduleName}.get(...)`);
-    const asyncId = executionAsyncId();
-    const req = get(options, cb);
+    const get = exports.get;
 
-    req.once('response', function () {
-      captureOutgoingRequest(req, req.res, startTime, recordHTTPRequest, asyncId);
-    });
+    function wrappedGet(options: object, cb: ResponseCallback) {
+      const startTime = now();
+      const requestEvents = recordRequest(`${moduleName}.get(...)`, startTime, executionAsyncId());
+      const recordHTTPRequest = (r: RequestInformation) => requestEvents.emit('complete', r);
+      const asyncId = executionAsyncId();
+      const req = get(
+        options,
+        wrapFunctionWithAsyncResource(cb, null, new AsyncResource('REQUEST')),
+      );
 
-    req.once('error', recordHTTPRequest.abort);
+      req.prependOnceListener('response', function () {
+        captureOutgoingRequest(req, req.res, startTime, recordHTTPRequest, asyncId);
+      });
 
-    return req;
-  }
+      req.prependOnceListener('error', (e: Error) => requestEvents.emit('error', e));
 
-  exports.get = wrappedGet;
+      return req;
+    }
 
-  return exports;
-});
+    exports.get = wrappedGet;
+
+    return exports;
+  });
+}
