@@ -1,8 +1,8 @@
-import { EventEmitter } from "events";
-import type { QueryInformation, RequestInformation } from "./types";
-import * as BI from "./bigint";
+import { EventEmitter } from 'events';
+import type { QueryInformation, RequestInformation } from './types';
+import * as BI from './bigint';
 
-const kEvents = Symbol("kEvents");
+const kEvents = Symbol('kEvents');
 
 export class TypedEventEmitter<T> {
   private events: EventEmitter;
@@ -28,21 +28,25 @@ export class TypedEventEmitter<T> {
   }
 }
 
+export type QueryEvents = TypedEventEmitter<{
+  error: Error;
+  complete: QueryInformation;
+}>;
+
 export type Query = {
-  events: TypedEventEmitter<{
-    error: Error;
-    complete: QueryInformation;
-  }>;
+  events: QueryEvents;
   asyncId: number;
   startTime: BI.PortableBigInt;
   moduleName: string;
 };
 
+export type RequestEvents = TypedEventEmitter<{
+  error: Error;
+  complete: RequestInformation;
+}>;
+
 export type Request = {
-  events: TypedEventEmitter<{
-    error: Error;
-    complete: RequestInformation;
-  }>;
+  events: RequestEvents;
   asyncId: number;
   startTime: BI.PortableBigInt;
   moduleName: string;
@@ -56,10 +60,10 @@ export const effects = new TypedEventEmitter<{
 export function recordQuery(
   moduleName: string,
   startTime: BI.PortableBigInt,
-  asyncId: number
-): Query["events"] {
+  asyncId: number,
+): Query['events'] {
   const events = new TypedEventEmitter();
-  effects.emit("query", {
+  effects.emit('query', {
     startTime,
     moduleName,
     events,
@@ -72,10 +76,10 @@ export function recordQuery(
 export function recordRequest(
   moduleName: string,
   startTime: BI.PortableBigInt,
-  asyncId: number
-): Request["events"] {
+  asyncId: number,
+): Request['events'] {
   const events = new TypedEventEmitter();
-  effects.emit("request", {
+  effects.emit('request', {
     startTime,
     moduleName,
     events,
