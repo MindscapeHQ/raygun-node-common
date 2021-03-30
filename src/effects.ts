@@ -63,6 +63,7 @@ export function recordQuery(
   asyncId: number,
 ): Query['events'] {
   const events = new TypedEventEmitter();
+
   effects.emit('query', {
     startTime,
     moduleName,

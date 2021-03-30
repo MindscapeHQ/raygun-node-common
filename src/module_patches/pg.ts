@@ -3,8 +3,9 @@ import path from 'path';
 
 import { wrapType } from '../async';
 import * as BI from '../bigint';
-import { recordQuery } from '../effects';
+import { QueryEvents, recordQuery } from '../effects';
 import { patchModules } from '../module_patches';
+import { QueryInformation } from '../types';
 
 const { now } = BI;
 
@@ -15,60 +16,79 @@ const PATHS = {
   },
 };
 
+const StartTime = Symbol('StartTime');
+const Events = Symbol('QueryEvents');
+const Client = Symbol('Client');
+
+type Client = {
+  connectionParameters: {
+    host: string;
+    database: string;
+  };
+};
+
 export function load() {
+  const clientsQuerying: Client[] = [];
+
   patchModules([PATHS.pg.query], (exports) => {
-    const wrappedType = wrapType(exports, ['handleDataRow', 'handleReadyForQuery'], ['text']);
+    const WrappedQuery = wrapType(exports, ['handleDataRow', 'handleReadyForQuery'], ['text']);
 
-    return wrappedType;
-  });
+    class Query<Args> extends WrappedQuery {
+      [StartTime]: BI.PortableBigInt;
+      [Events]: QueryEvents;
+      [Client]: Client;
 
-  patchModules([PATHS.pg.client], (exports) => {
-    const query = exports.prototype.query;
+      constructor(...args: Args[]) {
+        super(...args);
+        this[StartTime] = now();
+        this[Events] = recordQuery('pg', this[StartTime], executionAsyncId());
+        this[Client] = clientsQuerying[clientsQuerying.length - 1];
 
-    exports.prototype.query = function <
-      This extends {
-        connectionParameters: {
-          host: string;
-          database: string;
-        };
-        text: string;
-        _asyncResource: AsyncResource;
-      },
-      Config,
-      Values,
-      Results,
-      Callback extends (e: Error | null, result: Results) => void
-    >(this: This, config: Config, values: Values | Callback, callback?: Callback) {
-      const host = this.connectionParameters.host;
-      const database = this.connectionParameters.database;
-
-      if (typeof values === 'function') {
-        callback = values as any;
+        this.once('end', this.recordQuery);
       }
 
-      const newCallback = function wrappedQuery(this: This, error: Error | null, result: Results) {
+      handleError(error: Error, connection: any) {
+        super.handleError(error, connection);
+
+        this.off('end', this.recordQuery);
+        this.recordQuery();
+      }
+
+      recordQuery() {
+        console.log('recordQuery called!', this.text);
         const endTime = now();
-        if (callback) {
-          callback.call(this, error, result);
-        }
+        const duration = BI.subtract(endTime, this[StartTime]);
 
-        const duration = BI.subtract(endTime, startTime);
+        const host = this[Client].connectionParameters.host;
+        const database = this[Client].connectionParameters.database;
 
-        queryEvents.emit('complete', {
-          startTime,
+        const query = {
           provider: 'postgres',
           query: this.text,
           triggerAsyncId: this._asyncResource.triggerAsyncId(),
           duration,
           host,
           database,
-        });
-      };
+          startTime: this[StartTime],
+        };
 
-      const asyncId = executionAsyncId();
-      const startTime = BI.now();
-      const queryEvents = recordQuery('pg', startTime, asyncId);
-      const returnValue = query.call(this, config, values, newCallback);
+        this[Events].emit('complete', query);
+      }
+    }
+
+    return Query;
+  });
+
+  patchModules([PATHS.pg.client], (exports) => {
+    const query = exports.prototype.query;
+
+    exports.prototype.query = function <Args>(this: Client, ...args: Args[]) {
+      clientsQuerying.push(this);
+
+      const returnValue = query.apply(this, args);
+
+      clientsQuerying.pop();
+
       return returnValue;
     };
 
