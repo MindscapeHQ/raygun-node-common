@@ -1,3 +1,4 @@
+import type { EventEmitter } from 'events';
 import { executionAsyncId, AsyncResource } from 'async_hooks';
 import path from 'path';
 
@@ -17,7 +18,7 @@ const PATHS = {
 };
 
 const StartTime = Symbol('StartTime');
-const Events = Symbol('QueryEvents');
+const RecordQuery = Symbol('RecordQuery');
 const Client = Symbol('Client');
 
 type Client = {
@@ -27,40 +28,34 @@ type Client = {
   };
 };
 
+type Query = EventEmitter & {
+  [StartTime]: BI.PortableBigInt;
+  [RecordQuery]: () => void;
+  [Client]: Client | null;
+  _asyncResource: AsyncResource;
+
+  text: string;
+};
+
 export function load() {
   const clientsQuerying: Client[] = [];
 
   patchModules([PATHS.pg.query], (exports) => {
     const WrappedQuery = wrapType(exports, ['handleDataRow', 'handleReadyForQuery'], ['text']);
 
-    class Query<Args> extends WrappedQuery {
-      [StartTime]: BI.PortableBigInt;
-      [Events]: QueryEvents;
-      [Client]: Client;
+    function Query<Args>(this: Query, ...args: Args[]) {
+      WrappedQuery.apply(this, args);
 
-      constructor(...args: Args[]) {
-        super(...args);
-        this[StartTime] = now();
-        this[Events] = recordQuery('pg', this[StartTime], executionAsyncId());
-        this[Client] = clientsQuerying[clientsQuerying.length - 1];
+      this[StartTime] = now();
 
-        this.once('end', this.recordQuery);
-      }
+      const queryEvents = recordQuery(`pg (${this.text})`, this[StartTime], executionAsyncId());
 
-      handleError(error: Error, connection: any) {
-        super.handleError(error, connection);
-
-        this.off('end', this.recordQuery);
-        this.recordQuery();
-      }
-
-      recordQuery() {
-        console.log('recordQuery called!', this.text);
+      this[RecordQuery] = function captureQuery(this: Query) {
         const endTime = now();
         const duration = BI.subtract(endTime, this[StartTime]);
 
-        const host = this[Client].connectionParameters.host;
-        const database = this[Client].connectionParameters.database;
+        const host = this[Client]?.connectionParameters?.host || 'unknown';
+        const database = this[Client]?.connectionParameters?.database || 'unknown';
 
         const query = {
           provider: 'postgres',
@@ -72,9 +67,31 @@ export function load() {
           startTime: this[StartTime],
         };
 
-        this[Events].emit('complete', query);
+        queryEvents.emit('complete', query);
+      }.bind(this);
+
+      this[Client] = clientsQuerying[clientsQuerying.length - 1];
+
+      if ((this as any)._once) {
+        (this as any)._once('end', this[RecordQuery]);
+      } else {
+        this.once('end', this[RecordQuery]);
       }
+
+      return this;
     }
+
+    Query.prototype = WrappedQuery.prototype;
+
+    const originalHandleError = Query.prototype.handleError;
+
+    Query.prototype.handleError = function (this: any, ...args: any[]) {
+      this[RecordQuery]();
+
+      this.off('end', this[RecordQuery]);
+
+      return originalHandleError.apply(this, args);
+    };
 
     return Query;
   });
