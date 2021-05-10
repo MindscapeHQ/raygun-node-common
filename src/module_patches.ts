@@ -106,6 +106,7 @@ export function loadAll() {
     'mssql',
     'mysql',
     'mysql2',
+    'next',
     'pg',
     'redis',
   ];
