@@ -37,8 +37,8 @@ function peekQueue(queue: any) {
 type Denque<T> = { peek(): Command };
 type Command = { _address: string; _selected_db: number; _asyncResource: AsyncResource };
 type Client = { command_queue: Denque<Command>; address: string; selected_db: number };
-
 type ClientQueueView = () => AsyncResource | null;
+type ParametersOnOptionalCallback<F> = F extends (...args: any[]) => any ? Parameters<F> : [];
 
 const ASYNC_RESOURCE = Symbol('ASYNC_RESOURCE');
 
@@ -126,7 +126,7 @@ export function load() {
       this: Command,
       command: string,
       args: Args[],
-      callback: Callback,
+      callback?: Callback,
       ...additionalArgs: AdditionalArgs[]
     ) {
       const startTime = now();
@@ -136,10 +136,15 @@ export function load() {
 
       function wrappedCallback<CallbackThis, Results>(
         this: CallbackThis,
-        ...callbackArgs: Parameters<typeof callback>[]
+        ...callbackArgs: ParametersOnOptionalCallback<typeof callback>[]
       ) {
         const endTime = now();
-        const returnValue = callback.apply(this, callbackArgs);
+        let returnValue = null;
+
+        if (callback) {
+          returnValue = callback.apply(this, callbackArgs);
+        }
+
         const duration = BI.subtract(endTime, startTime);
 
         const argString = args.map(redisArgToString).join(' ');
