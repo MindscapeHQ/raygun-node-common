@@ -34,36 +34,6 @@ type MongoConnection = {
 };
 
 type HasAsyncResource = { _asyncResource: AsyncResource };
-type CursorWithOps = {
-  _next: (...args: any) => any;
-  _ops: string[];
-  namespace: {
-    db?: string;
-    database?: string;
-    collection: string;
-  };
-  s: {
-    state: number;
-  };
-  server: {
-    s: {
-      description?: {
-        address: string;
-      };
-    };
-  };
-  topology: {
-    command: (...args: any[]) => any;
-    host?: string;
-    port?: number;
-    s: {
-      options: {
-        host: string;
-        port: number;
-      };
-    };
-  };
-};
 
 function recordMongoQuery(event: MongoInstrumentationEvent) {
   const operation = operations.get(event.requestId);
@@ -105,38 +75,48 @@ function recordMongoQuery(event: MongoInstrumentationEvent) {
 function paths(basePath: string): string[] {
   // this exists to support testing with multiple versions of mongodb
   // we have to install mongodb as aliased versions, and that breaks our patching by default
-  return [basePath, `${basePath}3`];
+  return [basePath, basePath.replace('mongodb', 'mongodb3')];
 }
 
+const patchOptions = { versionConstraint: '<=3' };
+
 export function load() {
-  patchModules(paths('mongodb'), (exports: any) => {
-    const listener = exports.instrument(() => {});
+  patchModules(
+    paths('mongodb'),
+    (exports: any) => {
+      const listener = exports.instrument(() => {});
 
-    listener.on('started', function (event: MongoInstrumentationEvent) {
-      const startTime = BI.now();
-      if (event.commandName === 'ismaster') {
-        return;
-      }
-      const queryEvents = recordQuery(`mongodb`, startTime, executionAsyncId());
-      operations.set(event.requestId, {
-        event,
-        startTime,
-        asyncResource: new AsyncResource(`MONGO_OPERATION`),
-        recordQuery: (q) => queryEvents.emit('complete', q),
+      listener.on('started', function (event: MongoInstrumentationEvent) {
+        const startTime = BI.now();
+        if (event.commandName === 'ismaster') {
+          return;
+        }
+        const queryEvents = recordQuery(`mongodb`, startTime, executionAsyncId());
+        operations.set(event.requestId, {
+          event,
+          startTime,
+          asyncResource: new AsyncResource(`MONGO_OPERATION`),
+          recordQuery: (q) => queryEvents.emit('complete', q),
+        });
       });
-    });
 
-    listener.on('succeeded', recordMongoQuery);
-    listener.on('failed', recordMongoQuery);
+      listener.on('succeeded', recordMongoQuery);
+      listener.on('failed', recordMongoQuery);
 
-    return exports;
-  });
+      return exports;
+    },
+    patchOptions,
+  );
 
-  patchModules(paths(path.join('mongodb', 'lib', 'operations', 'operation.js')), (exports: any) => {
-    exports.OperationBase = wrapType(exports.OperationBase, [], []);
+  patchModules(
+    paths(path.join('mongodb', 'lib', 'operations', 'operation.js')),
+    (exports: any) => {
+      exports.OperationBase = wrapType(exports.OperationBase, [], []);
 
-    return exports;
-  });
+      return exports;
+    },
+    patchOptions,
+  );
 
   patchModules(
     paths(path.join('mongodb', 'lib', 'operations', 'execute_operation.js')),
@@ -160,6 +140,7 @@ export function load() {
 
       return wrappedExecuteOperation;
     },
+    patchOptions,
   );
 
   patchModules(
@@ -182,5 +163,6 @@ export function load() {
 
       return exports;
     },
+    patchOptions,
   );
 }

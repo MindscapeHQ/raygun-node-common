@@ -100,6 +100,6 @@ export function load() {
 
       return exports;
     },
-    !RUNNING_ON_AZURE,
+    { errorIfAlreadyLoaded: !RUNNING_ON_AZURE },
   );
 }

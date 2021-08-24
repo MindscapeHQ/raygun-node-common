@@ -47,7 +47,6 @@
       "./types/v8-profiler-node8",
       "./types/require-in-the-middle",
       "./types/mongodb3",
-      "./types/mongodb4",
       "mocha",
       "node",
       "express"
