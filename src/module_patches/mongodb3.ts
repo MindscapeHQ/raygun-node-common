@@ -102,8 +102,14 @@ function recordMongoQuery(event: MongoInstrumentationEvent) {
   operations.delete(event.requestId);
 }
 
+function paths(basePath: string): string[] {
+  // this exists to support testing with multiple versions of mongodb
+  // we have to install mongodb as aliased versions, and that breaks our patching by default
+  return [basePath, `${basePath}3`];
+}
+
 export function load() {
-  patchModules(['mongodb'], (exports: any) => {
+  patchModules(paths('mongodb'), (exports: any) => {
     const listener = exports.instrument(() => {});
 
     listener.on('started', function (event: MongoInstrumentationEvent) {
@@ -126,14 +132,14 @@ export function load() {
     return exports;
   });
 
-  patchModules([path.join('mongodb', 'lib', 'operations', 'operation.js')], (exports: any) => {
+  patchModules(paths(path.join('mongodb', 'lib', 'operations', 'operation.js')), (exports: any) => {
     exports.OperationBase = wrapType(exports.OperationBase, [], []);
 
     return exports;
   });
 
   patchModules(
-    [path.join('mongodb', 'lib', 'operations', 'execute_operation.js')],
+    paths(path.join('mongodb', 'lib', 'operations', 'execute_operation.js')),
     (exports: any) => {
       const executeOperation = exports;
 
@@ -156,22 +162,25 @@ export function load() {
     },
   );
 
-  patchModules([path.join('mongodb', 'lib', 'core', 'connection', 'msg.js')], (exports: any) => {
-    const parse = exports.BinMsg.prototype.parse;
+  patchModules(
+    paths(path.join('mongodb', 'lib', 'core', 'connection', 'msg.js')),
+    (exports: any) => {
+      const parse = exports.BinMsg.prototype.parse;
 
-    exports.BinMsg.prototype.parse = function wrappedParse<
-      This,
-      WorkItem extends { requestId: number }
-    >(this: This, workItem: WorkItem) {
-      const asyncResource = operations.get(workItem.requestId)?.asyncResource;
+      exports.BinMsg.prototype.parse = function wrappedParse<
+        This,
+        WorkItem extends { requestId: number }
+      >(this: This, workItem: WorkItem) {
+        const asyncResource = operations.get(workItem.requestId)?.asyncResource;
 
-      if (asyncResource) {
-        return asyncResource.runInAsyncScope(parse, this, workItem);
-      } else {
-        return parse.call(this, workItem);
-      }
-    };
+        if (asyncResource) {
+          return asyncResource.runInAsyncScope(parse, this, workItem);
+        } else {
+          return parse.call(this, workItem);
+        }
+      };
 
-    return exports;
-  });
+      return exports;
+    },
+  );
 }

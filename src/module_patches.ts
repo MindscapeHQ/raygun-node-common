@@ -102,7 +102,7 @@ export function loadAll() {
     'http_outgoing',
     'elasticsearch',
     'memcached',
-    'mongodb',
+    'mongodb3',
     'mssql',
     'mysql',
     'mysql2',
