@@ -26,8 +26,8 @@ export function load() {
       This extends {
         parent: {
           config: {
-            server: string;
-            database: string;
+            server?: string;
+            database?: string;
           };
         };
       },
@@ -49,8 +49,8 @@ export function load() {
 
           queryEvents.emit('complete', {
             provider: 'sqlserver',
-            host: config.server,
-            database: config.database,
+            host: config.server || 'localhost',
+            database: config.database || '<default>',
             triggerAsyncId: asyncId,
             query: command,
             startTime,
