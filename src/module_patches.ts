@@ -1,10 +1,17 @@
 import path from 'path';
+
+import semver from 'semver';
 import Hook from 'require-in-the-middle';
 
 // Unfortunately object is about the best type we can do for exports, to get the
 // real type we would need a way to look up the type definition of a module at compile time
 export type Exports = { [key: string]: any };
-export type Patch = (exports: Exports, name: string) => Exports;
+export type PatchFunction = (exports: Exports, name: string) => Exports;
+export type Patch = {
+  apply: PatchFunction;
+  versionConstraint: string | null;
+};
+export type PatchOptions = { errorIfAlreadyLoaded?: boolean; versionConstraint?: string | null };
 
 const globalPatches: Patch[] = [];
 const patches: Map<string, Patch[]> = new Map();
@@ -55,13 +62,24 @@ function errorIfModuleIsAlreadyLoaded(moduleName: string) {
   }
 }
 
-export function patchModules(modules: string[], patch: Patch, errorIfAlreadyLoaded = true) {
+export function patchModules(
+  modules: string[],
+  apply: PatchFunction,
+  patchOptions: PatchOptions = { errorIfAlreadyLoaded: true, versionConstraint: null },
+) {
+  const { errorIfAlreadyLoaded, versionConstraint } = patchOptions;
+
   for (const moduleName of modules) {
     if (errorIfAlreadyLoaded) {
       errorIfModuleIsAlreadyLoaded(moduleName);
     }
 
     const modulePatches = patches.get(moduleName) || [];
+
+    const patch = {
+      apply,
+      versionConstraint: versionConstraint || null,
+    };
 
     modulePatches.push(patch);
 
@@ -73,16 +91,42 @@ export function patchAll(patch: Patch) {
   globalPatches.push(patch);
 }
 
-Hook(null, { internals: true }, function (exports: Exports, name: string) {
+const versions = new Map<string, string | null>();
+
+function getModuleVersion(baseDir: string): string | null {
+  const versionInCache = versions.get(baseDir);
+
+  if (versionInCache) {
+    return versionInCache;
+  }
+
+  const version = require(path.join(baseDir, 'package.json'))?.version || null;
+
+  versions.set(baseDir, version);
+
+  return version;
+}
+
+Hook(null, { internals: true }, function (exports: Exports, name: string, baseDir: string) {
   for (const globalPatch of globalPatches) {
-    exports = globalPatch(exports, name);
+    exports = globalPatch.apply(exports, name);
   }
 
   const modulePatches = patches.get(name);
 
   if (modulePatches) {
     for (const patch of modulePatches) {
-      exports = patch(exports, name);
+      let patchApplies = true;
+
+      if (patch.versionConstraint) {
+        const version = getModuleVersion(baseDir);
+
+        patchApplies = Boolean(version && semver.satisfies(version, patch.versionConstraint));
+      }
+
+      if (patchApplies) {
+        exports = patch.apply(exports, name);
+      }
     }
   }
 
@@ -102,10 +146,12 @@ export function loadAll() {
     'http_outgoing',
     'elasticsearch',
     'memcached',
-    'mongodb',
+    'mongodb3',
+    'mongodb4',
     'mssql',
     'mysql',
     'mysql2',
+    'next',
     'pg',
     'redis',
   ];

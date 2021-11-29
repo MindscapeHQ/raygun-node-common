@@ -45,7 +45,7 @@ describe('pg support', () => {
     const asyncId = executionAsyncId();
 
     effects.once('query', (query) => {
-      assert.equal(query.moduleName, 'pg');
+      assert.equal(query.moduleName, 'pg (SELECT 1)');
       assert.equal(typeof query.startTime, 'bigint');
 
       query.events.on('complete', (queryData) => {

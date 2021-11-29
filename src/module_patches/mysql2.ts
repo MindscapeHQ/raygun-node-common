@@ -13,9 +13,7 @@ const RecordQuery = Symbol('RecordQuery');
 
 export function load() {
   patchModules([path.join('mysql2', 'lib', 'commands', 'command.js')], (exports) => {
-    const wrappedType = wrapType(exports, ['execute'], []);
-
-    return wrappedType;
+    return wrapType(exports, ['execute'], []);
   });
 
   patchModules([path.join('mysql2', 'lib', 'commands', 'query.js')], (exports) => {
@@ -30,13 +28,18 @@ export function load() {
       constructor(...args: Args[]) {
         super(...args);
         this[StartTime] = now();
-        const triggerEvents = recordQuery(`mysql`, this[StartTime], executionAsyncId());
+        const triggerEvents = recordQuery(
+          `mysql2 (${this.sql})`,
+          this[StartTime],
+          executionAsyncId(),
+        );
         this[RecordQuery] = (q) => triggerEvents.emit('complete', q);
+
+        this.once('end', this.recordQuery.bind(this));
       }
 
-      done(...args: Args[]) {
+      recordQuery() {
         const endTime = now();
-        super.done(...args);
 
         const duration = BI.subtract(endTime, this[StartTime]);
 

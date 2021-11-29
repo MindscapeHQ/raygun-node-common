@@ -37,21 +37,21 @@ function peekQueue(queue: any) {
 type Denque<T> = { peek(): Command };
 type Command = { _address: string; _selected_db: number; _asyncResource: AsyncResource };
 type Client = { command_queue: Denque<Command>; address: string; selected_db: number };
-
 type ClientQueueView = () => AsyncResource | null;
+type ParametersOnOptionalCallback<F> = F extends (...args: any[]) => any ? Parameters<F> : [];
 
 const ASYNC_RESOURCE = Symbol('ASYNC_RESOURCE');
 
 export function load() {
   const clientsConstructing: ClientQueueView[] = [];
 
-  patchModules([path.join('redis-parser', 'lib', 'parser.js')], (Parser: any) => {
-    const execute = Parser.prototype.execute;
+  patchModules([path.join('redis-parser', 'lib', 'parser.js')], (OriginalParser: any) => {
+    const execute = OriginalParser.prototype.execute;
 
-    class WrappedParser extends Parser {
+    class Parser extends OriginalParser {
       _clientCommandView: ClientQueueView | null;
 
-      constructor(...args: Parameters<typeof Parser>[]) {
+      constructor(...args: Parameters<typeof OriginalParser>[]) {
         super(...args);
         this._clientCommandView = clientsConstructing[0];
       }
@@ -69,15 +69,15 @@ export function load() {
       }
     }
 
-    return makeClassCallable(WrappedParser);
+    return makeClassCallable(Parser);
   });
 
   patchModules(['redis'], (exports) => {
-    const internal_send_command = exports.RedisClient.prototype.internal_send_command;
+    const original_internal_send_command = exports.RedisClient.prototype.internal_send_command;
 
-    const RedisClient = exports.RedisClient;
+    const OriginalRedisClient = exports.RedisClient;
 
-    function WrappedRedisClient(this: Client, ...args: Parameters<typeof RedisClient>[]) {
+    function RedisClient(this: Client, ...args: Parameters<typeof OriginalRedisClient>[]) {
       clientsConstructing.unshift(() => {
         const val = peekQueue(this.command_queue);
 
@@ -88,45 +88,45 @@ export function load() {
         return val;
       });
 
-      const client = RedisClient.apply(this, args);
+      const client = OriginalRedisClient.apply(this, args);
       clientsConstructing.shift();
       return client;
     }
 
-    WrappedRedisClient.prototype = RedisClient.prototype;
+    RedisClient.prototype = OriginalRedisClient.prototype;
 
-    function wrapped_internal_send_command(this: Client, command: Command) {
+    function internal_send_command(this: Client, command: Command) {
       command._address = this.address;
       command._selected_db = this.selected_db;
 
-      return internal_send_command.call(this, command);
+      return original_internal_send_command.call(this, command);
     }
 
-    WrappedRedisClient.prototype.internal_send_command = wrapped_internal_send_command;
+    RedisClient.prototype.internal_send_command = internal_send_command;
 
-    exports.RedisClient = WrappedRedisClient;
+    exports.RedisClient = RedisClient;
 
-    const createClient = exports.createClient;
+    const originalCreateClient = exports.createClient;
 
-    function wrappedCreateClient(...args: Parameters<typeof createClient>[]) {
+    function createClient(...args: Parameters<typeof originalCreateClient>[]) {
       const options = require('redis/lib/createClient')(...args);
       // TS has trouble inferring the return type of old style constructors
-      return new (WrappedRedisClient as any)(options);
+      return new (RedisClient as any)(options);
     }
 
-    exports.createClient = wrappedCreateClient;
+    exports.createClient = createClient;
 
     return exports;
   });
 
   patchModules([path.join('redis', 'lib', 'command.js')], (exports) => {
-    const Command = wrapType(exports, [], []);
+    const OriginalCommand = wrapType(exports, [], []);
 
-    function WrappedCommand<This, Args, Callback extends (...args: any[]) => any, AdditionalArgs>(
+    function Command<This, Args, Callback extends (...args: any[]) => any, AdditionalArgs>(
       this: Command,
       command: string,
       args: Args[],
-      callback: Callback,
+      originalCallback?: Callback,
       ...additionalArgs: AdditionalArgs[]
     ) {
       const startTime = now();
@@ -134,12 +134,17 @@ export function load() {
       const queryEvents = recordQuery(`redis`, startTime, asyncId);
       const commandObject = this;
 
-      function wrappedCallback<CallbackThis, Results>(
+      function callback<CallbackThis, Results>(
         this: CallbackThis,
-        ...callbackArgs: Parameters<typeof callback>[]
+        ...callbackArgs: ParametersOnOptionalCallback<typeof originalCallback>[]
       ) {
         const endTime = now();
-        const returnValue = callback.apply(this, callbackArgs);
+        let returnValue = null;
+
+        if (originalCallback) {
+          returnValue = originalCallback.apply(this, callbackArgs);
+        }
+
         const duration = BI.subtract(endTime, startTime);
 
         const argString = args.map(redisArgToString).join(' ');
@@ -158,12 +163,12 @@ export function load() {
         return returnValue;
       }
 
-      Command.call(this, command, args, wrappedCallback, ...additionalArgs);
+      OriginalCommand.call(this, command, args, callback, ...additionalArgs);
     }
 
-    WrappedCommand.prototype = Command.prototype;
+    Command.prototype = OriginalCommand.prototype;
 
-    return WrappedCommand;
+    return Command;
   });
 
   const ioredisMainPaths = [
@@ -180,13 +185,9 @@ export function load() {
       Redis = exports.default;
     }
 
-    const sendCommand = Redis.prototype.sendCommand;
+    const originalSendCommand = Redis.prototype.sendCommand;
 
-    Redis.prototype.sendCommand = function wrappedSendCommand(
-      this: any,
-      command: any,
-      stream: any,
-    ) {
+    Redis.prototype.sendCommand = function sendCommand(this: any, command: any, stream: any) {
       const startTime = now();
       const asyncId = executionAsyncId();
       const client = this;
@@ -208,7 +209,7 @@ export function load() {
         });
       });
 
-      return sendCommand.call(this, command, stream);
+      return originalSendCommand.call(this, command, stream);
     };
 
     return exports;
@@ -244,10 +245,10 @@ export function load() {
       path.join('ioredis', 'lib', 'redis', 'event_handler.js'),
     ],
     (exports) => {
-      const connectHandler = exports.connectHandler;
+      const originalConnectHandler = exports.connectHandler;
 
-      function wrappedConnectHandler(this: any, self: any) {
-        const f = connectHandler.call(this, self);
+      function connectHandler(this: any, self: any) {
+        const f = originalConnectHandler.call(this, self);
 
         return function () {
           clientsConstructing.unshift(() => {
@@ -268,7 +269,7 @@ export function load() {
         };
       }
 
-      exports.connectHandler = wrappedConnectHandler;
+      exports.connectHandler = connectHandler;
 
       return exports;
     },

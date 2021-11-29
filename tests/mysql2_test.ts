@@ -53,11 +53,11 @@ describe('mysql support', () => {
     });
   }).timeout(10000);
 
-  it('allows tracking postgres queries', (done) => {
+  it('allows tracking mysql queries', (done) => {
     const asyncId = executionAsyncId();
 
     effects.once('query', (query) => {
-      assert.equal(query.moduleName, 'mysql');
+      assert.equal(query.moduleName, 'mysql2 (SELECT 1)');
       assert.equal(typeof query.startTime, 'bigint');
 
       query.events.on('complete', (queryData) => {

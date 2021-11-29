@@ -7,7 +7,7 @@ import { spawnSync } from 'child_process';
 require('../src/module_patches').loadAll();
 
 import { effects } from '../src/effects';
-import { MongoClient } from 'mongodb';
+import { MongoClient } from 'mongodb3';
 
 const USER = process.env['MONGOUSER'] || os.userInfo().username;
 const HOST = process.env['MONGOHOST'] || '127.0.0.1';
@@ -21,7 +21,7 @@ type Client = MongoClient;
 
 const url = `mongodb://${HOST}:${PORT}`;
 
-const MONGO_VERSION_PARTS = require('mongodb/package.json')
+const MONGO_VERSION_PARTS = require('mongodb3/package.json')
   .version.split('.')
   .map((p: string) => parseInt(p, 10));
 const MONGO_MAJOR_VERSON = MONGO_VERSION_PARTS[0];

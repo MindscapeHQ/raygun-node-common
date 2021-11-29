@@ -55,7 +55,7 @@ function connect() {
 }
 
 function disconnect() {
-  mssql.close();
+  return mssql.close();
 }
 
 describe('mssql support', () => {
@@ -109,5 +109,37 @@ describe('mssql support', () => {
     });
 
     mssql.query([`SELECT * FROM [dbo].[TEST]`]);
+  });
+
+  context('when the database field is omitted from the config', async () => {
+    it('uses <default> for the reported database name instead', async (done) => {
+      await disconnect();
+
+      await mssql.connect({
+        user: USER,
+        password: PASSWORD,
+        HOST: HOST,
+        server: HOST,
+        options: {
+          trustedConnection: true,
+          trustServerCertificate: true,
+        },
+      });
+
+      effects.once('query', (query) => {
+        assert.equal(query.moduleName, 'mssql');
+        assert.equal(typeof query.startTime, 'bigint');
+
+        query.events.on('complete', (queryData) => {
+          assert.equal(queryData.provider, 'sqlserver');
+          assert.equal(queryData.query, 'SELECT * FROM [dbo].[TEST]');
+          assert.equal(queryData.host, HOST);
+          assert.equal(queryData.database, DATABASE);
+          done();
+        });
+      });
+
+      mssql.query([`SELECT * FROM [dbo].[TEST]`]);
+    }).timeout(10000);
   });
 });
