@@ -145,6 +145,7 @@ export function loadAll() {
   const patches = [
     'http_outgoing',
     'elasticsearch',
+    'graphql',
     'memcached',
     'mongodb3',
     'mongodb4',
