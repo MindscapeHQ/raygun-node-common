@@ -52,17 +52,20 @@ export type Request = {
   moduleName: string;
 };
 
+export type GraphQL = { asyncId: number; query: string };
+
 export const effects = new TypedEventEmitter<{
   query: Query;
   request: Request;
+  graphql: GraphQL;
 }>();
 
 export function recordQuery(
   moduleName: string,
   startTime: BI.PortableBigInt,
   asyncId: number,
-): Query['events'] {
-  const events = new TypedEventEmitter();
+): QueryEvents {
+  const events: QueryEvents = new TypedEventEmitter();
 
   effects.emit('query', {
     startTime,
